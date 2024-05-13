@@ -28,6 +28,7 @@
 #include "srte.h"
 #include "printfrr.h"
 #include "srv6.h"
+#include "dscp.h"
 
 DEFINE_MTYPE_STATIC(LIB, ZCLIENT, "Zclient");
 DEFINE_MTYPE_STATIC(LIB, REDIST_INST, "Redistribution instance IDs");
@@ -1338,6 +1339,8 @@ int zapi_route_encode(uint8_t cmd, struct stream *s, struct zapi_route *api)
 		stream_putc(s, api->distance);
 	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_METRIC))
 		stream_putl(s, api->metric);
+	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_DSCP))
+		stream_putl(s, api->dscp);
 	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_TAG))
 		stream_putl(s, api->tag);
 	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_MTU))
@@ -1591,6 +1594,8 @@ int zapi_route_decode(struct stream *s, struct zapi_route *api)
 		STREAM_GETC(s, api->distance);
 	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_METRIC))
 		STREAM_GETL(s, api->metric);
+	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_DSCP))
+		STREAM_GETL(s, api->dscp);
 	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_TAG))
 		STREAM_GETL(s, api->tag);
 	if (CHECK_FLAG(api->message, ZAPI_MESSAGE_MTU))
@@ -1710,9 +1715,9 @@ static void zapi_pbr_rule_filter_encode(struct stream *s, struct pbr_filter *f)
 		stream_putw(s, f->dst_port);
 
 	if (CHECK_FLAG(f->filter_bm, PBR_FILTER_DSCP))
-		stream_putc(s, f->dsfield & PBR_DSFIELD_DSCP);
+		stream_putc(s, f->dsfield & DSFIELD_DSCP);
 	if (CHECK_FLAG(f->filter_bm, PBR_FILTER_ECN))
-		stream_putc(s, f->dsfield & PBR_DSFIELD_ECN);
+		stream_putc(s, f->dsfield & DSFIELD_ECN);
 
 	/* vlan */
 	if (CHECK_FLAG(f->filter_bm, PBR_FILTER_PCP))
@@ -1753,7 +1758,7 @@ static bool zapi_pbr_rule_filter_decode(struct stream *s, struct pbr_filter *f)
 		STREAM_GETC(s, dscp);
 	if (CHECK_FLAG(f->filter_bm, PBR_FILTER_ECN))
 		STREAM_GETC(s, ecn);
-	f->dsfield = (dscp & PBR_DSFIELD_DSCP) | (ecn & PBR_DSFIELD_ECN);
+	f->dsfield = (dscp & DSFIELD_DSCP) | (ecn & DSFIELD_ECN);
 
 	/* vlan */
 	if (CHECK_FLAG(f->filter_bm, PBR_FILTER_PCP))
@@ -1792,9 +1797,9 @@ static void zapi_pbr_rule_action_encode(struct stream *s, struct pbr_action *a)
 		stream_putw(s, a->dst_port);
 
 	if (CHECK_FLAG(a->flags, PBR_ACTION_DSCP))
-		stream_putc(s, a->dscp & PBR_DSFIELD_DSCP);
+		stream_putc(s, a->dscp & DSFIELD_DSCP);
 	if (CHECK_FLAG(a->flags, PBR_ACTION_ECN))
-		stream_putc(s, a->ecn & PBR_DSFIELD_ECN);
+		stream_putc(s, a->ecn & DSFIELD_ECN);
 
 	/* L2 */
 	if (CHECK_FLAG(a->flags, PBR_ACTION_PCP))
@@ -1828,11 +1833,11 @@ static bool zapi_pbr_rule_action_decode(struct stream *s, struct pbr_action *a)
 
 	if (CHECK_FLAG(a->flags, PBR_ACTION_DSCP)) {
 		STREAM_GETC(s, a->dscp);
-		a->dscp &= PBR_DSFIELD_DSCP;
+		a->dscp &= DSFIELD_DSCP;
 	}
 	if (CHECK_FLAG(a->flags, PBR_ACTION_ECN)) {
 		STREAM_GETC(s, a->ecn);
-		a->ecn &= PBR_DSFIELD_ECN;
+		a->ecn &= DSFIELD_ECN;
 	}
 
 	/* L2 */
