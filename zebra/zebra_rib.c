@@ -56,6 +56,9 @@ DEFINE_MTYPE(ZEBRA, RE,       "Route Entry");
 DEFINE_MTYPE_STATIC(ZEBRA, RIB_DEST,       "RIB destination");
 DEFINE_MTYPE_STATIC(ZEBRA, RIB_UPDATE_CTX, "Rib update context object");
 DEFINE_MTYPE_STATIC(ZEBRA, WQ_WRAPPER, "WQ wrapper");
+DEFINE_MTYPE_STATIC(ZEBRA, ROUTE_NOTIFY_JOB_OWNER_CTX, "Route Notify Job Owner");
+DEFINE_MTYPE_STATIC(ZEBRA, PROCESS_NOTIFY_CLIENT_LIST,
+		    "Process Notify Client List");
 
 /*
  * Event, list, and mutex for delivery of dataplane results
@@ -234,6 +237,48 @@ struct wq_label_wrapper {
 
 	int afi;
 };
+
+/* intermediate structures used to store route notify information */
+PREDECL_DLIST(zebra_route_notify_job_owner_list);
+struct zebra_route_notify_job_owner_list_head zebra_route_notify_owner_list;
+struct zebra_route_notify_job_owner_ctx {
+	vrf_id_t vrf_id;
+	struct prefix prefix;
+	int type;
+	uint16_t instance;
+	uint32_t table;
+	afi_t afi;
+	safi_t safi;
+	enum zapi_route_notify_owner note;
+	/* Embedded list linkage */
+	struct zebra_route_notify_job_owner_list_item rno_entries;
+};
+DECLARE_DLIST(zebra_route_notify_job_owner_list,
+	      struct zebra_route_notify_job_owner_ctx, rno_entries);
+
+static struct event *t_zebra_route_notify_job_owner_list;
+
+/* intermediate structures used to gather messages per client before sending it */
+PREDECL_DLIST(zebra_process_notify_client_list);
+
+struct zebra_process_notify_client_ctx {
+	uint16_t num_msgs;
+	int instance;
+	int type;
+	struct zserv *zclient;
+	struct stream_fifo out_fifo;
+	/* Embedded list linkage */
+	struct zebra_process_notify_client_list_item pnc_entries;
+};
+DECLARE_DLIST(zebra_process_notify_client_list,
+	      struct zebra_process_notify_client_ctx, pnc_entries);
+
+/* statistics information about how notifications are sent */
+static uint32_t zebra_route_notify_job_owner_list_num;
+static uint32_t zebra_route_notify_job_owner_list_processed;
+static uint32_t zebra_route_notify_job_owner_list_max_batch;
+static uint32_t zebra_process_notify_client_list_num;
+static uint32_t zebra_process_notify_client_list_processed;
 
 static void rib_addnode(struct route_node *rn, struct route_entry *re,
 			int process);
@@ -2129,20 +2174,24 @@ static void rib_process_result(struct zebra_dplane_ctx *ctx)
 
 			/* Notify route owner */
 			if (zebra_router_notify_on_ack())
-				zsend_route_notify_owner_ctx(ctx, ZAPI_ROUTE_INSTALLED);
+				zsend_route_notify_owner_ctx(ctx,
+							     ZAPI_ROUTE_INSTALLED,
+							     true);
 			else {
 				if (re) {
 					if (CHECK_FLAG(re->flags,
 						       ZEBRA_FLAG_OFFLOADED))
 						zsend_route_notify_owner_ctx(
 							ctx,
-							ZAPI_ROUTE_INSTALLED);
+							ZAPI_ROUTE_INSTALLED,
+							true);
 					if (CHECK_FLAG(
 						    re->flags,
 						    ZEBRA_FLAG_OFFLOAD_FAILED))
 						zsend_route_notify_owner_ctx(
 							ctx,
-							ZAPI_ROUTE_FAIL_INSTALL);
+							ZAPI_ROUTE_FAIL_INSTALL,
+							true);
 				}
 			}
 		} else {
@@ -2174,15 +2223,16 @@ static void rib_process_result(struct zebra_dplane_ctx *ctx)
 				UNSET_FLAG(re->status, ROUTE_ENTRY_INSTALLED);
 				UNSET_FLAG(re->status, ROUTE_ENTRY_FAILED);
 			}
-			zsend_route_notify_owner_ctx(ctx, ZAPI_ROUTE_REMOVED);
+			zsend_route_notify_owner_ctx(ctx, ZAPI_ROUTE_REMOVED,
+						     true);
 
 			if (zvrf)
 				zvrf->removals++;
 		} else {
 			if (re)
 				SET_FLAG(re->status, ROUTE_ENTRY_FAILED);
-			zsend_route_notify_owner_ctx(ctx,
-						     ZAPI_ROUTE_REMOVE_FAIL);
+			zsend_route_notify_owner_ctx(ctx, ZAPI_ROUTE_REMOVE_FAIL,
+						     true);
 
 			zlog_warn("%s(%u:%u):%pRN: Route Deletion failure",
 				  VRF_LOGNAME(vrf), dplane_ctx_get_vrf(ctx),
@@ -2453,10 +2503,12 @@ static void rib_process_dplane_notify(struct zebra_dplane_ctx *ctx)
 
 	if (!zebra_router_notify_on_ack()) {
 		if (CHECK_FLAG(re->flags, ZEBRA_FLAG_OFFLOADED))
-			zsend_route_notify_owner_ctx(ctx, ZAPI_ROUTE_INSTALLED);
+			zsend_route_notify_owner_ctx(ctx, ZAPI_ROUTE_INSTALLED,
+						     false);
 		if (CHECK_FLAG(re->flags, ZEBRA_FLAG_OFFLOAD_FAILED))
 			zsend_route_notify_owner_ctx(ctx,
-						     ZAPI_ROUTE_FAIL_INSTALL);
+						     ZAPI_ROUTE_FAIL_INSTALL,
+						     false);
 	}
 
 	/* Make any changes visible for lsp and nexthop-tracking processing */
@@ -4774,6 +4826,118 @@ void rib_close_table(struct route_table *table)
 	}
 }
 
+void zebra_route_notify_job_owner_list_enqueue(
+	struct route_node *rn, const struct zebra_dplane_ctx *ctx,
+	enum zapi_route_notify_owner note)
+{
+	struct zebra_route_notify_job_owner_ctx *entry;
+
+	entry = XCALLOC(MTYPE_ROUTE_NOTIFY_JOB_OWNER_CTX,
+			sizeof(struct zebra_route_notify_job_owner_ctx));
+	entry->vrf_id = dplane_ctx_get_vrf(ctx);
+	entry->afi = dplane_ctx_get_afi(ctx);
+	entry->safi = dplane_ctx_get_safi(ctx);
+	entry->table = dplane_ctx_get_table(ctx);
+	entry->instance = dplane_ctx_get_instance(ctx);
+	entry->type = dplane_ctx_get_type(ctx);
+	entry->note = note;
+	prefix_copy(&entry->prefix, &rn->p);
+	zebra_route_notify_job_owner_list_num++;
+	zebra_route_notify_job_owner_list_add_tail(&zebra_route_notify_owner_list,
+						   entry);
+}
+
+static void zebra_route_process_notify_thread_loop(struct event *event)
+{
+	struct zebra_route_notify_job_owner_list_head ctxlist;
+	struct zebra_route_notify_job_owner_ctx *ctx;
+	uint32_t count = 0;
+	struct zebra_process_notify_client_list_head client_list;
+	struct zebra_process_notify_client_ctx *client;
+	struct zserv *zclient;
+
+	zebra_process_notify_client_list_init(&client_list);
+
+	do {
+		zebra_route_notify_job_owner_list_init(&ctxlist);
+
+		/* Dequeue list of context structs */
+		while ((ctx = zebra_route_notify_job_owner_list_pop(
+				&zebra_route_notify_owner_list)) != NULL)
+			zebra_route_notify_job_owner_list_add_tail(&ctxlist,
+								   ctx);
+
+		/* Dequeue context block */
+		ctx = zebra_route_notify_job_owner_list_pop(&ctxlist);
+		/* If we've emptied the results queue, we're done */
+		if (ctx == NULL)
+			break;
+		while (ctx) {
+			zebra_route_notify_job_owner_list_processed++;
+			zclient = zserv_find_client(ctx->type, ctx->instance);
+			if (zclient && zclient->notify_owner) {
+				frr_each_safe (zebra_process_notify_client_list,
+					       &client_list, client) {
+					if (client->type == ctx->type &&
+					    client->instance == ctx->instance)
+						break;
+				}
+				if (!client) {
+					client = XCALLOC(
+						MTYPE_PROCESS_NOTIFY_CLIENT_LIST,
+						sizeof(struct zebra_process_notify_client_ctx));
+					stream_fifo_init(&client->out_fifo);
+					client->instance = ctx->instance;
+					client->type = ctx->type;
+					client->zclient = zclient;
+					zebra_process_notify_client_list_add_tail(
+						&client_list, client);
+				}
+				route_notify_internal_prefix(&ctx->prefix,
+							     ctx->type,
+							     ctx->instance,
+							     ctx->vrf_id,
+							     ctx->table,
+							     ctx->note,
+							     ctx->afi, ctx->safi,
+							     &client->out_fifo);
+				client->num_msgs++;
+				count++;
+				zebra_process_notify_client_list_num++;
+				if (client->num_msgs == 20) {
+					zserv_send_batch(zclient,
+							 &client->out_fifo);
+					zebra_process_notify_client_list_processed++;
+					client->num_msgs = 0;
+				}
+			}
+			XFREE(MTYPE_ROUTE_NOTIFY_JOB_OWNER_CTX, ctx);
+			ctx = zebra_route_notify_job_owner_list_pop(&ctxlist);
+		}
+	} while (1);
+
+	if (count > zebra_route_notify_job_owner_list_max_batch)
+		zebra_route_notify_job_owner_list_max_batch = count;
+
+	while ((client = zebra_process_notify_client_list_pop(&client_list)) !=
+	       NULL) {
+		if (client->num_msgs) {
+			zserv_send_batch(client->zclient, &client->out_fifo);
+			zebra_process_notify_client_list_processed++;
+			client->num_msgs = 0;
+		}
+		stream_fifo_deinit(&client->out_fifo);
+		XFREE(MTYPE_PROCESS_NOTIFY_CLIENT_LIST, client);
+	}
+}
+
+static void zebra_route_process_notify(void)
+{
+	event_add_timer_msec(zrouter.master,
+			     zebra_route_process_notify_thread_loop, NULL, 5,
+			     &t_zebra_route_notify_job_owner_list);
+}
+
 /*
  * Handler for async dataplane results after a pseudowire installation
  */
@@ -4975,6 +5139,8 @@ static void rib_process_dplane_results(struct event *thread)
 
 	} while (1);
 
+	zebra_route_process_notify();
+
 #ifdef HAVE_SCRIPTING
 	if (fs)
 		frrscript_delete(fs);
@@ -5027,6 +5193,8 @@ void zebra_rib_init(void)
 {
 	check_route_info();
 
+	zebra_route_notify_job_owner_list_init(&zebra_route_notify_owner_list);
+
 	rib_queue_init();
 
 	/* Init dataplane, and register for results */
@@ -5040,6 +5208,7 @@ void zebra_rib_terminate(void)
 	struct zebra_dplane_ctx *ctx;
 
 	EVENT_OFF(t_dplane);
+	EVENT_OFF(t_zebra_route_notify_job_owner_list);
 
 	ctx = dplane_ctx_dequeue(&rib_dplane_q);
 	while (ctx) {
@@ -5149,4 +5318,16 @@ struct route_table *rib_tables_iter_next(rib_tables_iter_t *iter)
 		iter->state = RIB_TABLES_ITER_S_DONE;
 
 	return table;
+}
+
+void zebra_route_notification_information_display(struct vty *vty)
+{
+	vty_out(vty,
+		"Route notify owner list count %u, processed %u, max per batch %u\n",
+		zebra_route_notify_job_owner_list_num,
+		zebra_route_notify_job_owner_list_processed,
+		zebra_route_notify_job_owner_list_max_batch);
+	vty_out(vty, "Process Notify Client list count %u, processed %u\n",
+		zebra_process_notify_client_list_num,
+		zebra_process_notify_client_list_processed);
 }
