@@ -1681,6 +1681,7 @@ int routing_control_plane_protocols_control_plane_protocol_pim_address_family_mc
 	struct vrf *vrf;
 	struct pim_instance *pim;
 	const char *mode;
+	enum pim_rpf_lookup_mode old_mode;
 
 	switch (args->event) {
 	case NB_EV_VALIDATE:
@@ -1692,9 +1693,8 @@ int routing_control_plane_protocols_control_plane_protocol_pim_address_family_mc
 		pim = vrf->info;
 		mode = yang_dnode_get_string(args->dnode, NULL);
 
-		if (strmatch(mode, "none"))
-			pim->rpf_mode = MCAST_NO_CONFIG;
-		else if (strmatch(mode, "urib-only"))
+		old_mode = pim->rpf_mode;
+		if (strmatch(mode, "urib-only"))
 			pim->rpf_mode = MCAST_URIB_ONLY;
 		else if (strmatch(mode, "mrib-only"))
 			pim->rpf_mode = MCAST_MRIB_ONLY;
@@ -1710,7 +1710,12 @@ int routing_control_plane_protocols_control_plane_protocol_pim_address_family_mc
 			return CMD_WARNING_CONFIG_FAILED;
 		}
 
-		/* TODO: Signal to redo lookups? */
+		if (pim->rpf_mode != old_mode &&
+		    /* MCAST_MIX_MRIB_FIRST is the default if not configured */
+		    (old_mode != MCAST_NO_CONFIG && pim->rpf_mode != MCAST_MIX_MRIB_FIRST)) {
+			pim_nht_mode_changed(pim);
+		}
+
 		break;
 	}
 
@@ -1722,6 +1727,7 @@ int routing_control_plane_protocols_control_plane_protocol_pim_address_family_mc
 {
 	struct vrf *vrf;
 	struct pim_instance *pim;
+	enum pim_rpf_lookup_mode old_mode;
 
 	switch (args->event) {
 	case NB_EV_VALIDATE:
@@ -1731,8 +1737,12 @@ int routing_control_plane_protocols_control_plane_protocol_pim_address_family_mc
 	case NB_EV_APPLY:
 		vrf = nb_running_get_entry(args->dnode, NULL, true);
 		pim = vrf->info;
+		old_mode = pim->rpf_mode;
 		pim->rpf_mode = MCAST_NO_CONFIG;
-		/* TODO: Signal to redo lookups? */
+		/* MCAST_MIX_MRIB_FIRST is the default if not configured */
+		if (old_mode != MCAST_NO_CONFIG && old_mode != MCAST_MIX_MRIB_FIRST) {
+			pim_nht_mode_changed(pim);
+		}
 		break;
 	}
 
