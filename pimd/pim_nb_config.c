@@ -3043,6 +3043,112 @@ int routing_control_plane_protocols_control_plane_protocol_pim_address_family_rp
 	return NB_OK;
 }
 
+/*
+ * XPath: /frr-routing:routing/control-plane-protocols/control-plane-protocol/frr-pim:pim/address-family/frr-pim-rp:rp/auto-rp/mapping-agent/send-rp-discovery
+ */
+int routing_control_plane_protocols_control_plane_protocol_pim_address_family_rp_auto_rp_mapping_agent_send_rp_discovery_modify(
+	struct nb_cb_modify_args *args)
+{
+#if PIM_IPV == 4
+	struct vrf *vrf;
+	struct pim_instance *pim;
+
+	switch (args->event) {
+	case NB_EV_VALIDATE:
+	case NB_EV_PREPARE:
+	case NB_EV_ABORT:
+		break;
+	case NB_EV_APPLY:
+		vrf = nb_running_get_entry(args->dnode, NULL, true);
+		pim = vrf->info;
+		if (pim && pim->autorp) {
+			pim->autorp->send_rp_discovery = yang_dnode_get_bool(args->dnode, NULL);
+			pim_autorp_send_discovery_apply(pim->autorp);
+		}
+	}
+#endif
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-routing:routing/control-plane-protocols/control-plane-protocol/frr-pim:pim/address-family/frr-pim-rp:rp/auto-rp/mapping-agent/discovery-scope
+ */
+int routing_control_plane_protocols_control_plane_protocol_pim_address_family_rp_auto_rp_mapping_agent_discovery_scope_modify(
+	struct nb_cb_modify_args *args)
+{
+#if PIM_IPV == 4
+	struct vrf *vrf;
+	struct pim_instance *pim;
+
+	switch (args->event) {
+	case NB_EV_VALIDATE:
+	case NB_EV_PREPARE:
+	case NB_EV_ABORT:
+		break;
+	case NB_EV_APPLY:
+		vrf = nb_running_get_entry(args->dnode, NULL, true);
+		pim = vrf->info;
+		if (pim && pim->autorp)
+			pim->autorp->discovery_scope = yang_dnode_get_uint8(args->dnode, NULL);
+	}
+#endif
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-routing:routing/control-plane-protocols/control-plane-protocol/frr-pim:pim/address-family/frr-pim-rp:rp/auto-rp/mapping-agent/discovery-interval
+ */
+int routing_control_plane_protocols_control_plane_protocol_pim_address_family_rp_auto_rp_mapping_agent_discovery_interval_modify(
+	struct nb_cb_modify_args *args)
+{
+#if PIM_IPV == 4
+	struct vrf *vrf;
+	struct pim_instance *pim;
+
+	switch (args->event) {
+	case NB_EV_VALIDATE:
+	case NB_EV_PREPARE:
+	case NB_EV_ABORT:
+		break;
+	case NB_EV_APPLY:
+		vrf = nb_running_get_entry(args->dnode, NULL, true);
+		pim = vrf->info;
+		if (pim && pim->autorp)
+			pim->autorp->discovery_interval = yang_dnode_get_uint16(args->dnode, NULL);
+	}
+#endif
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-routing:routing/control-plane-protocols/control-plane-protocol/frr-pim:pim/address-family/frr-pim-rp:rp/auto-rp/mapping-agent/discovery-holdtime
+ */
+int routing_control_plane_protocols_control_plane_protocol_pim_address_family_rp_auto_rp_mapping_agent_discovery_holdtime_modify(
+	struct nb_cb_modify_args *args)
+{
+#if PIM_IPV == 4
+	struct vrf *vrf;
+	struct pim_instance *pim;
+
+	switch (args->event) {
+	case NB_EV_VALIDATE:
+	case NB_EV_PREPARE:
+	case NB_EV_ABORT:
+		break;
+	case NB_EV_APPLY:
+		vrf = nb_running_get_entry(args->dnode, NULL, true);
+		pim = vrf->info;
+		if (pim && pim->autorp)
+			pim->autorp->discovery_holdtime = yang_dnode_get_uint16(args->dnode, NULL);
+	}
+#endif
+
+	return NB_OK;
+}
+
 static void yang_addrsel(struct cand_addrsel *addrsel,
 			 const struct lyd_node *node)
 {
@@ -3062,6 +3168,99 @@ static void yang_addrsel(struct cand_addrsel *addrsel,
 	} else if (yang_dnode_exists(node, "if-loopback")) {
 		addrsel->cfg_mode = CAND_ADDR_LO;
 	}
+	addrsel->cfg_enable = true;
+}
+
+#if PIM_IPV == 4
+static int pim_autorp_mapping_agent_addrsel(struct pim_autorp *autorp,
+					    const struct lyd_node *mapping_agent_node,
+					    struct vrf *vrf)
+{
+	yang_addrsel(&autorp->mapping_agent_addrsel, mapping_agent_node);
+	if (cand_addrsel_update(&autorp->mapping_agent_addrsel, vrf))
+		pim_autorp_send_discovery_apply(autorp);
+	return NB_OK;
+}
+#endif
+
+/*
+ * XPath:
+ *  /frr-routing:routing/control-plane-protocols/control-plane-protocol/frr-pim:pim/address-family/frr-pim-rp:rp/auto-rp/mapping-agent/address
+ *  /frr-routing:routing/control-plane-protocols/control-plane-protocol/frr-pim:pim/address-family/frr-pim-rp:rp/auto-rp/mapping-agent/interface
+ *  /frr-routing:routing/control-plane-protocols/control-plane-protocol/frr-pim:pim/address-family/frr-pim-rp:rp/auto-rp/mapping-agent/if-loopback
+ *  /frr-routing:routing/control-plane-protocols/control-plane-protocol/frr-pim:pim/address-family/frr-pim-rp:rp/auto-rp/mapping-agent/if-any
+ */
+int routing_control_plane_protocols_control_plane_protocol_pim_address_family_rp_auto_rp_mapping_agent_addrsel_create(
+	struct nb_cb_create_args *args)
+{
+#if PIM_IPV == 4
+	struct vrf *vrf;
+	struct pim_instance *pim;
+	const struct lyd_node *mapping_agent_node;
+
+	switch (args->event) {
+	case NB_EV_VALIDATE:
+	case NB_EV_PREPARE:
+	case NB_EV_ABORT:
+		break;
+	case NB_EV_APPLY:
+		mapping_agent_node = yang_dnode_get_parent(args->dnode, "mapping-agent");
+		vrf = nb_running_get_entry(args->dnode, NULL, true);
+		pim = vrf->info;
+		if (pim && pim->autorp)
+			return pim_autorp_mapping_agent_addrsel(pim->autorp, mapping_agent_node,
+								vrf);
+	}
+#endif
+	return NB_OK;
+}
+
+int routing_control_plane_protocols_control_plane_protocol_pim_address_family_rp_auto_rp_mapping_agent_addrsel_modify(
+	struct nb_cb_modify_args *args)
+{
+#if PIM_IPV == 4
+	struct vrf *vrf;
+	struct pim_instance *pim;
+	const struct lyd_node *mapping_agent_node;
+
+	switch (args->event) {
+	case NB_EV_VALIDATE:
+	case NB_EV_PREPARE:
+	case NB_EV_ABORT:
+		break;
+	case NB_EV_APPLY:
+		mapping_agent_node = yang_dnode_get_parent(args->dnode, "mapping-agent");
+		vrf = nb_running_get_entry(args->dnode, NULL, true);
+		pim = vrf->info;
+		if (pim && pim->autorp)
+			return pim_autorp_mapping_agent_addrsel(pim->autorp, mapping_agent_node,
+								vrf);
+	}
+#endif
+	return NB_OK;
+}
+
+int routing_control_plane_protocols_control_plane_protocol_pim_address_family_rp_auto_rp_mapping_agent_addrsel_destroy(
+	struct nb_cb_destroy_args *args)
+{
+#if PIM_IPV == 4
+	struct vrf *vrf;
+	struct pim_instance *pim;
+
+	switch (args->event) {
+	case NB_EV_VALIDATE:
+	case NB_EV_PREPARE:
+	case NB_EV_ABORT:
+	case NB_EV_APPLY:
+		vrf = nb_running_get_entry(args->dnode, NULL, true);
+		pim = vrf->info;
+		if (pim && pim->autorp)
+			pim->autorp->mapping_agent_addrsel.cfg_enable = false;
+		break;
+	}
+#endif
+
+	return NB_OK;
 }
 
 static int candidate_bsr_addrsel(struct bsm_scope *scope,
