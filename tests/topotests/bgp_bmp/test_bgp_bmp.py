@@ -373,7 +373,9 @@ def configure_prefixes(tgen, node, asn, safi, prefixes, vrf=None, update=True):
             "{}network {}\n".format(withdraw, ip),
             "exit-address-family\n",
         ]
-        logger.debug("[{}] setting prefix: ipv{} {} {}".format(node, ip.version, safi, ip))
+        logger.debug(
+            "[{}] setting prefix: ipv{} {} {}".format(node, ip.version, safi, ip)
+        )
         tgen.gears[node].vtysh_cmd("".join(cmd))
 
 
@@ -484,7 +486,6 @@ def test_bmp_bgp_vpn():
     _test_prefixes(ADJ_IN_POST_POLICY, vrf="vrf1", step=2)
     logger.info("***** VPN prefixes loc-rib logging *****")
     _test_prefixes(LOC_RIB, vrf="vrf1", step=2)
-
 
 
 def multipath_unicast_prefixes(policy, step, vrf=None):
