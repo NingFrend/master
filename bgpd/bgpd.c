@@ -309,9 +309,7 @@ static int bgp_router_id_set(struct bgp *bgp, const struct in_addr *id,
 
 		peer->last_reset = PEER_DOWN_RID_CHANGE;
 
-		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+		peer_notify_config_change(peer->connection);
 	}
 
 	/* EVPN uses router id in RD, update them */
@@ -447,8 +445,7 @@ void bm_wait_for_fib_set(bool set)
 				    peer->connection->status))
 				continue;
 
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(peer->connection);
 		}
 	}
 }
@@ -503,8 +500,7 @@ void bgp_suppress_fib_pending_set(struct bgp *bgp, bool set)
 		if (!BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
 			continue;
 
-		bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-				BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+		peer_notify_config_change(peer->connection);
 	}
 }
 
@@ -528,9 +524,7 @@ void bgp_cluster_id_set(struct bgp *bgp, struct in_addr *cluster_id)
 
 		peer->last_reset = PEER_DOWN_CLID_CHANGE;
 
-		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+		peer_notify_config_change(peer->connection);
 	}
 }
 
@@ -552,9 +546,7 @@ void bgp_cluster_id_unset(struct bgp *bgp)
 
 		peer->last_reset = PEER_DOWN_CLID_CHANGE;
 
-		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+		peer_notify_config_change(peer->connection);
 	}
 }
 
@@ -637,9 +629,7 @@ void bgp_confederation_id_set(struct bgp *bgp, as_t as, const char *as_str)
 					    peer->connection->status)) {
 					peer->last_reset =
 						PEER_DOWN_CONFED_ID_CHANGE;
-					bgp_notify_send(peer->connection,
-							BGP_NOTIFY_CEASE,
-							BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+					peer_notify_config_change(peer->connection);
 				} else
 					bgp_session_reset_safe(peer, &nnode);
 			}
@@ -655,9 +645,7 @@ void bgp_confederation_id_set(struct bgp *bgp, as_t as, const char *as_str)
 					    peer->connection->status)) {
 					peer->last_reset =
 						PEER_DOWN_CONFED_ID_CHANGE;
-					bgp_notify_send(peer->connection,
-							BGP_NOTIFY_CEASE,
-							BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+					peer_notify_config_change(peer->connection);
 				} else
 					bgp_session_reset_safe(peer, &nnode);
 			}
@@ -682,9 +670,7 @@ void bgp_confederation_id_unset(struct bgp *bgp)
 			peer->last_reset = PEER_DOWN_CONFED_ID_CHANGE;
 			if (BGP_IS_VALID_STATE_FOR_NOTIF(
 				    peer->connection->status))
-				bgp_notify_send(peer->connection,
-						BGP_NOTIFY_CEASE,
-						BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+				peer_notify_config_change(peer->connection);
 			else
 				bgp_session_reset_safe(peer, &nnode);
 		}
@@ -736,9 +722,7 @@ void bgp_confederation_peers_add(struct bgp *bgp, as_t as, const char *as_str)
 					    peer->connection->status)) {
 					peer->last_reset =
 						PEER_DOWN_CONFED_PEER_CHANGE;
-					bgp_notify_send(peer->connection,
-							BGP_NOTIFY_CEASE,
-							BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+					peer_notify_config_change(peer->connection);
 				} else
 					bgp_session_reset_safe(peer, &nnode);
 			}
@@ -793,9 +777,7 @@ void bgp_confederation_peers_remove(struct bgp *bgp, as_t as)
 					    peer->connection->status)) {
 					peer->last_reset =
 						PEER_DOWN_CONFED_PEER_CHANGE;
-					bgp_notify_send(peer->connection,
-							BGP_NOTIFY_CEASE,
-							BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+					peer_notify_config_change(peer->connection);
 				} else
 					bgp_session_reset_safe(peer, &nnode);
 			}
@@ -2102,8 +2084,7 @@ void peer_as_change(struct peer *peer, as_t as, enum peer_asn_type as_type,
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
 		peer->last_reset = PEER_DOWN_REMOTE_AS_CHANGE;
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(peer->connection);
 		else
 			bgp_session_reset(peer);
 	}
@@ -2469,15 +2450,11 @@ static int peer_activate_af(struct peer *peer, afi_t afi, safi_t safi)
 							   false);
 				}
 			} else {
-				bgp_notify_send(peer->connection,
-						BGP_NOTIFY_CEASE,
-						BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+				peer_notify_config_change(peer->connection);
 			}
 		}
-		if (peer->connection->status == OpenSent ||
-		    peer->connection->status == OpenConfirm)
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+		peer_notify_config_change(peer->connection);
+
 		/*
 		 * If we are turning on a AFI/SAFI locally and we've
 		 * started bringing a peer up, we need to tell
@@ -2490,8 +2467,7 @@ static int peer_activate_af(struct peer *peer, afi_t afi, safi_t safi)
 		other = peer->doppelganger;
 		if (other && (other->connection->status == OpenSent ||
 			      other->connection->status == OpenConfirm))
-			bgp_notify_send(other->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(other->connection);
 	}
 
 	return 0;
@@ -2598,14 +2574,10 @@ static bool non_peergroup_deactivate_af(struct peer *peer, afi_t afi,
 				bgp_clear_route(peer, afi, safi);
 				peer->pcount[afi][safi] = 0;
 			} else {
-				bgp_notify_send(peer->connection,
-						BGP_NOTIFY_CEASE,
-						BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+				peer_notify_config_change(peer->connection);
 			}
-		} else {
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
-		}
+		} else
+			peer_notify_config_change(peer->connection);
 	}
 
 	return false;
@@ -3074,6 +3046,12 @@ int peer_group_remote_as(struct bgp *bgp, const char *group_name, as_t *as,
 	return 0;
 }
 
+void peer_notify_config_change(struct peer_connection *connection)
+{
+	if (BGP_IS_VALID_STATE_FOR_NOTIF(connection->status))
+		bgp_notify_send(connection, BGP_NOTIFY_CEASE, BGP_NOTIFY_CEASE_PEER_UNCONFIG);
+}
+
 void peer_notify_unconfig(struct peer_connection *connection)
 {
 	if (BGP_IS_VALID_STATE_FOR_NOTIF(connection->status))
@@ -3354,8 +3332,7 @@ int peer_group_bind(struct bgp *bgp, union sockunion *su, struct peer *peer,
 		peer->last_reset = PEER_DOWN_RMAP_BIND;
 
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(peer->connection);
 		else
 			bgp_session_reset(peer);
 	}
@@ -4723,8 +4700,7 @@ void peer_change_action(struct peer *peer, afi_t afi, safi_t safi,
 				 PEER_FLAG_CONFIG_NODE)))
 			peer_delete(peer->doppelganger);
 
-		bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-				BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+		peer_notify_config_change(peer->connection);
 	} else if (type == peer_change_reset_in) {
 		if (CHECK_FLAG(peer->cap, PEER_CAP_REFRESH_RCV))
 			bgp_route_refresh_send(peer, afi, safi, 0, 0, 0,
@@ -4736,8 +4712,7 @@ void peer_change_action(struct peer *peer, afi_t afi, safi_t safi,
 					 PEER_FLAG_CONFIG_NODE)))
 				peer_delete(peer->doppelganger);
 
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(peer->connection);
 		}
 	} else if (type == peer_change_reset_out) {
 		paf = peer_af_find(peer, afi, safi);
@@ -4936,8 +4911,7 @@ static void peer_flag_modify_action(struct peer *peer, uint64_t flag)
 			BGP_EVENT_ADD(peer->connection, BGP_Stop);
 		}
 	} else if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status)) {
-		bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-				BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+		peer_notify_config_change(peer->connection);
 	} else
 		bgp_session_reset(peer);
 }
@@ -5425,9 +5399,7 @@ int peer_ebgp_multihop_set(struct peer *peer, int ttl)
 		if (peer->sort != BGP_PEER_IBGP) {
 			if (BGP_IS_VALID_STATE_FOR_NOTIF(
 				    peer->connection->status))
-				bgp_notify_send(peer->connection,
-						BGP_NOTIFY_CEASE,
-						BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+				peer_notify_config_change(peer->connection);
 			else
 				bgp_session_reset(peer);
 
@@ -5445,9 +5417,7 @@ int peer_ebgp_multihop_set(struct peer *peer, int ttl)
 
 			if (BGP_IS_VALID_STATE_FOR_NOTIF(
 				    peer->connection->status))
-				bgp_notify_send(peer->connection,
-						BGP_NOTIFY_CEASE,
-						BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+				peer_notify_config_change(peer->connection);
 			else
 				bgp_session_reset(peer);
 
@@ -5483,8 +5453,7 @@ int peer_ebgp_multihop_unset(struct peer *peer)
 
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(peer->connection);
 		else
 			bgp_session_reset(peer);
 
@@ -5502,9 +5471,7 @@ int peer_ebgp_multihop_unset(struct peer *peer)
 			if (peer->connection->fd >= 0) {
 				if (BGP_IS_VALID_STATE_FOR_NOTIF(
 					    peer->connection->status))
-					bgp_notify_send(peer->connection,
-							BGP_NOTIFY_CEASE,
-							BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+					peer_notify_config_change(peer->connection);
 				else
 					bgp_session_reset(peer);
 			}
@@ -5658,8 +5625,7 @@ int peer_update_source_if_set(struct peer *peer, const char *ifname)
 		peer->last_reset = PEER_DOWN_UPDATE_SOURCE_CHANGE;
 		/* Send notification or reset peer depending on state. */
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(peer->connection);
 		else
 			bgp_session_reset(peer);
 
@@ -5696,8 +5662,7 @@ int peer_update_source_if_set(struct peer *peer, const char *ifname)
 
 		/* Send notification or reset peer depending on state. */
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(member->connection->status))
-			bgp_notify_send(member->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(member->connection);
 		else
 			bgp_session_reset(member);
 
@@ -5729,8 +5694,7 @@ void peer_update_source_addr_set(struct peer *peer, const union sockunion *su)
 		peer->last_reset = PEER_DOWN_UPDATE_SOURCE_CHANGE;
 		/* Send notification or reset peer depending on state. */
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(peer->connection);
 		else
 			bgp_session_reset(peer);
 
@@ -5766,8 +5730,7 @@ void peer_update_source_addr_set(struct peer *peer, const union sockunion *su)
 
 		/* Send notification or reset peer depending on state. */
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(member->connection->status))
-			bgp_notify_send(member->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(peer->connection);
 		else
 			bgp_session_reset(member);
 
@@ -5817,8 +5780,7 @@ void peer_update_source_unset(struct peer *peer)
 		peer->last_reset = PEER_DOWN_UPDATE_SOURCE_CHANGE;
 		/* Send notification or reset peer depending on state. */
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(peer->connection);
 		else
 			bgp_session_reset(peer);
 
@@ -5853,8 +5815,7 @@ void peer_update_source_unset(struct peer *peer)
 
 		/* Send notification or reset peer depending on state. */
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(member->connection->status))
-			bgp_notify_send(member->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(member->connection);
 		else
 			bgp_session_reset(member);
 
@@ -6838,8 +6799,7 @@ int peer_local_as_unset(struct peer *peer)
 		peer->last_reset = PEER_DOWN_LOCAL_AS_CHANGE;
 		/* Send notification or stop peer depending on state. */
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(peer->connection);
 		else
 			BGP_EVENT_ADD(peer->connection, BGP_Stop);
 
@@ -6867,8 +6827,7 @@ int peer_local_as_unset(struct peer *peer)
 
 		/* Send notification or stop peer depending on state. */
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(member->connection->status))
-			bgp_notify_send(member->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(member->connection);
 		else
 			bgp_session_reset(member);
 	}
@@ -6899,8 +6858,7 @@ int peer_password_set(struct peer *peer, const char *password)
 		peer->last_reset = PEER_DOWN_PASSWORD_CHANGE;
 		/* Send notification or reset peer depending on state. */
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(peer->connection);
 		else
 			bgp_session_reset(peer);
 
@@ -6937,8 +6895,7 @@ int peer_password_set(struct peer *peer, const char *password)
 		member->last_reset = PEER_DOWN_PASSWORD_CHANGE;
 		/* Send notification or reset peer depending on state. */
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(member->connection->status))
-			bgp_notify_send(member->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(member->connection);
 		else
 			bgp_session_reset(member);
 
@@ -6983,8 +6940,7 @@ int peer_password_unset(struct peer *peer)
 	if (!CHECK_FLAG(peer->sflags, PEER_STATUS_GROUP)) {
 		/* Send notification or reset peer depending on state. */
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(peer->connection);
 		else
 			bgp_session_reset(peer);
 
@@ -7010,8 +6966,7 @@ int peer_password_unset(struct peer *peer)
 
 		/* Send notification or reset peer depending on state. */
 		if (BGP_IS_VALID_STATE_FOR_NOTIF(member->connection->status))
-			bgp_notify_send(member->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+			peer_notify_config_change(member->connection);
 		else
 			bgp_session_reset(member);
 
