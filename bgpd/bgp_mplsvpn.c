@@ -1052,14 +1052,22 @@ static bool leak_update_nexthop_valid(struct bgp *to_bgp, struct bgp_dest *bn,
 	struct bgp_path_info *bpi_ultimate;
 	struct bgp *bgp_nexthop;
 	struct bgp_table *table;
+	struct interface *ifp;
 	bool nh_valid;
 
 	bpi_ultimate = bgp_get_imported_bpi_ultimate(source_bpi);
 	table = bgp_dest_table(bpi_ultimate->net);
 
-	if (bpi->extra && bpi->extra->vrfleak && bpi->extra->vrfleak->bgp_orig)
+	if (bpi->extra && bpi->extra->vrfleak && bpi->extra->vrfleak->bgp_orig) {
 		bgp_nexthop = bpi->extra->vrfleak->bgp_orig;
-	else
+		if (bgp_nexthop->vrf_id == VRF_UNKNOWN)
+			return false;
+		else {
+			ifp = if_get_vrf_loopback(bgp_nexthop->vrf_id);
+			if (ifp && !if_is_up(ifp))
+				return false;
+		}
+	} else
 		bgp_nexthop = bgp_orig;
 
 	/*
