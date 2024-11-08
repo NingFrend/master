@@ -18,6 +18,7 @@
 
 #include "ospf6_proto.h"
 #include "ospf6_lsa.h"
+#include "ospf6_tlv.h"
 #include "ospf6_lsdb.h"
 #include "ospf6_message.h"
 #include "ospf6_asbr.h"
@@ -48,7 +49,17 @@ const uint8_t ospf6_lsa_min_size[OSPF6_LSTYPE_SIZE] = {
 	[0x00ff & OSPF6_LSTYPE_TYPE_7] = OSPF6_AS_EXTERNAL_LSA_MIN_SIZE,
 	[0x00ff & OSPF6_LSTYPE_LINK] = OSPF6_LINK_LSA_MIN_SIZE,
 	[0x00ff & OSPF6_LSTYPE_INTRA_PREFIX] = OSPF6_INTRA_PREFIX_LSA_MIN_SIZE,
-	[0x00ff & OSPF6_LSTYPE_GRACE_LSA] = 0
+	[0x00ff & OSPF6_LSTYPE_GRACE_LSA] = 0,
+
+	[0x00ff & OSPF6_LSTYPE_E_ROUTER] = OSPF6_ROUTER_LSA_MIN_SIZE,
+	[0x00ff & OSPF6_LSTYPE_E_NETWORK] = OSPF6_NETWORK_LSA_MIN_SIZE,
+	[0x00ff & OSPF6_LSTYPE_E_INTER_PREFIX] = OSPF6_INTER_PREFIX_LSA_MIN_SIZE,
+	[0x00ff & OSPF6_LSTYPE_E_INTER_ROUTER] = OSPF6_INTER_ROUTER_LSA_FIX_SIZE,
+	[0x00ff & OSPF6_LSTYPE_E_AS_EXTERNAL] = OSPF6_AS_EXTERNAL_LSA_MIN_SIZE,
+	/* 0x20 + OSPF6_LSTYPE_GROUP_MEMBERSHIP is unused, not to be allocated */
+	[0x00ff & OSPF6_LSTYPE_E_TYPE_7] = OSPF6_AS_EXTERNAL_LSA_MIN_SIZE,
+	[0x00ff & OSPF6_LSTYPE_E_LINK] = OSPF6_E_LINK_LSA_MIN_SIZE,
+	[0x00ff & OSPF6_LSTYPE_E_INTRA_PREFIX] = OSPF6_INTRA_PREFIX_LSA_MIN_SIZE
 };
 
 void *lsdesc_start_lsa_type(struct ospf6_lsa_header *header, int lsa_type)
@@ -114,6 +125,213 @@ void *nth_prefix(struct ospf6_lsa_header *header, int pos)
 	}
 
 	return NULL;
+}
+
+void *nth_tlv(struct ospf6_lsa_header *header, int pos)
+{
+	struct tlv_header *cur = lsdesc_start(header);
+	char *end = ospf6_lsa_end(header);
+	int i = 0;
+
+	if (pos == 0)
+		return cur;
+
+	while ((char *)cur < end && (char *)cur + TLV_SIZE(cur) <= end) {
+		if (i == pos)
+			return cur;
+		i++;
+		cur = TLV_HDR_NEXT(cur);
+	}
+
+	return NULL;
+}
+
+/* Router LSA */
+static int each_router_lsdesc(struct ospf6_lsa_header *lsa_header,
+			      const struct tlv_handler *h, void *cb_data)
+{
+	struct ospf6_router_lsdesc *desc = lsdesc_start(lsa_header);
+	char *lsa_end = ospf6_lsa_end(lsa_header);
+	int err = 0;
+
+	for (; (char *)desc < lsa_end && (char *)(desc + 1) <= lsa_end && !err;
+	     desc++)
+		err = (*h->callback)(desc, cb_data);
+	return err;
+}
+
+/* Network LSA */
+static int each_network_lsdesc(struct ospf6_lsa_header *lsa_header,
+			       const struct tlv_handler *h, void *cb_data)
+{
+	struct ospf6_network_lsdesc *desc = lsdesc_start(lsa_header);
+	char *lsa_end = ospf6_lsa_end(lsa_header);
+	int err = 0;
+
+	for (; (char *)desc < lsa_end && (char *)(desc + 1) <= lsa_end && !err;
+	     desc++)
+		err = (*h->callback)(desc, cb_data);
+	return err;
+}
+
+/* Link LSA */
+static int each_prefix_in_link_lsa(struct ospf6_lsa_header *lsa_header,
+				   const struct tlv_handler *h, void *cb_data)
+{
+	struct ospf6_prefix *prefix = lsdesc_start(lsa_header);
+	char *lsa_end = ospf6_lsa_end(lsa_header);
+	int err = 0;
+
+	for (; (char *)prefix < lsa_end &&
+	       (char *)prefix + OSPF6_PREFIX_SIZE(prefix) <= lsa_end && !err;
+	     prefix = OSPF6_PREFIX_NEXT(prefix))
+		err = (*h->callback)(prefix, cb_data);
+	return err;
+}
+
+static char *tlv_start_of_stlvs(struct tlv_header *header)
+{
+	struct ospf6_prefix *prefix;
+	enum ospf6_extended_lsa_tlv_types type = ntohs(header->type);
+	size_t size = tlv_body_min_size(type);
+
+	switch (type) {
+	case OSPF6_TLV_RESERVED:
+		return NULL;
+	case OSPF6_TLV_ROUTER_LINK:
+	case OSPF6_TLV_ATTACHED_ROUTERS:
+	case OSPF6_TLV_INTER_AREA_ROUTER:
+	case OSPF6_TLV_IPV6_LL_ADDR:
+	case OSPF6_TLV_IPV4_LL_ADDR:
+		break;
+	case OSPF6_TLV_INTER_AREA_PREFIX:
+	case OSPF6_TLV_EXTERNAL_PREFIX:
+	case OSPF6_TLV_INTRA_AREA_PREFIX:
+		prefix = (struct ospf6_prefix *)(TLV_BODY(header) + size);
+		size += OSPF6_PREFIX_SIZE(prefix);
+		break;
+	case OSPF6_TLV_ENUM_END:
+	default:
+		return NULL;
+	}
+	return (TLV_SIZE(header) == size) ? NULL : TLV_BODY(header) + size;
+}
+
+/* forward declaration */
+static int foreach_tlv(struct tlv_header *header, char *end,
+		       const struct tlv_handler *tlvhandler, void *cb_data,
+		       int lsa_type, const char *caller);
+
+static int handle_one_tlv(struct tlv_header *header,
+			  const struct tlv_handler *handler, void *cb_data,
+			  int lsa_type, const char *caller)
+{
+	struct tlv_header *stlv_start;
+	char *tlv_end;
+	const struct tlv_handler *sh;
+	int err;
+
+	err = (*handler->callback)(header, cb_data);
+
+	if (err)
+		return err;
+
+	/*
+	 * Are there any Sub-TLVs?
+	 * According to RFC 8362, "sub-TLVs may be nested to any level".
+	 * The sub-TLVs type IDs are mostly distinct in the E-LSA space,
+	 * but overlap with the TLV IDs, so they must be nested.
+	 *
+	 * FIXME: Calling the tlv iterator again creates an unbounded mutual
+	 * recursion, because the nesting is unbounded.
+	 */
+	tlv_end = (char *)header + TLV_SIZE(header);
+	stlv_start = (struct tlv_header *)tlv_start_of_stlvs(header);
+
+	if (stlv_start && (char *)stlv_start != (char *)tlv_end) {
+		sh = handler->sub_handler;
+
+		while (sh && sh->callback) {
+			err = foreach_tlv(stlv_start, tlv_end, sh, cb_data,
+					  lsa_type, caller);
+			if (err)
+				return err;
+			sh++;
+		}
+	}
+	return 0;
+}
+
+static int foreach_tlv(struct tlv_header *header, char *end,
+		       const struct tlv_handler *handler, void *cb_data,
+		       int lsa_type, const char *caller)
+{
+	int err = 0;
+	const struct tlv_handler *ch;
+
+	for (; (char *)header < end && (char *)header + TLV_SIZE(header) <= end && !err;
+	     header = TLV_HDR_NEXT(header)) {
+		ch = handler;
+		while (ch && ch->callback) {
+			assert(ch->callback);
+
+			if (ch->tlv_type && ch->tlv_type == ntohs(header->type)) {
+				err = handle_one_tlv(header, ch, cb_data,
+						     lsa_type, caller);
+				if (err) {
+					zlog_debug("%s: Handler for TLV type 0x%x in LSA type 0x%x, returned error %d",
+						   caller, ch->tlv_type,
+						   lsa_type, err);
+					return err;
+				}
+				break;
+			}
+			ch++;
+		}
+		if (IS_OSPF6_DEBUG_LSA_TYPE(lsa_type) && !ch)
+			zlog_debug("%s: No handler for TLV type 0x%x in LSA type 0x%x.",
+				   caller, ntohs(header->type), lsa_type);
+	}
+	return 0;
+}
+
+static int foreach_tlv_in_lsa(struct ospf6_lsa_header *lsa_header,
+			      const struct tlv_handler *h, void *cb_data,
+			      const char *caller)
+{
+	struct tlv_header *tlvh = lsdesc_start(lsa_header);
+	char *lsa_end = ospf6_lsa_end(lsa_header);
+
+	return foreach_tlv(tlvh, lsa_end, h, cb_data, ntohs(lsa_header->type),
+			   caller);
+}
+
+/* Use foreach_lsdesc() macro instead */
+int _foreach_lsdesc(struct ospf6_lsa_header *lsa_header,
+		    const struct tlv_handler *handler, void *cb_data,
+		    const char *caller)
+{
+	assert(handler && handler->callback && cb_data);
+
+	switch (ntohs(lsa_header->type)) {
+	case OSPF6_LSTYPE_ROUTER:
+		return each_router_lsdesc(lsa_header, handler, cb_data);
+	case OSPF6_LSTYPE_NETWORK:
+		return each_network_lsdesc(lsa_header, handler, cb_data);
+	case OSPF6_LSTYPE_LINK:
+	case OSPF6_LSTYPE_INTRA_PREFIX:
+		return each_prefix_in_link_lsa(lsa_header, handler, cb_data);
+	case OSPF6_LSTYPE_E_ROUTER:
+	case OSPF6_LSTYPE_E_NETWORK:
+	case OSPF6_LSTYPE_E_LINK:
+	case OSPF6_LSTYPE_E_INTRA_PREFIX:
+		return foreach_tlv_in_lsa(lsa_header, handler, cb_data, caller);
+	default:
+		zlog_err("%s: Unhandled LSA type: 0x%.2x", caller,
+			 ntohs(lsa_header->type));
+		return -1;
+	}
+	return -1;
 }
 
 struct ospf6 *ospf6_get_by_lsdb(struct ospf6_lsa *lsa)
@@ -227,6 +445,7 @@ const char *ospf6_lstype_short_name(uint16_t type)
 uint8_t ospf6_lstype_debug(uint16_t type)
 {
 	const struct ospf6_lsa_handler *handler;
+
 	handler = ospf6_get_lsa_handler(type);
 	return handler->lh_debug;
 }
@@ -501,7 +720,6 @@ void ospf6_lsa_show_summary(struct vty *vty, struct ospf6_lsa *lsa,
 			    json_object *json_array, bool use_json)
 {
 	char adv_router[16], id[16];
-	int type;
 	const struct ospf6_lsa_handler *handler;
 	char buf[64];
 	int cnt = 0;
@@ -514,49 +732,15 @@ void ospf6_lsa_show_summary(struct vty *vty, struct ospf6_lsa *lsa,
 	inet_ntop(AF_INET, &lsa->header->adv_router, adv_router,
 		  sizeof(adv_router));
 
-	type = ntohs(lsa->header->type);
 	handler = ospf6_get_lsa_handler(lsa->header->type);
 
 	if (use_json)
 		json_obj = json_object_new_object();
 
-	switch (type) {
-	case OSPF6_LSTYPE_INTER_PREFIX:
-	case OSPF6_LSTYPE_INTER_ROUTER:
-	case OSPF6_LSTYPE_AS_EXTERNAL:
-	case OSPF6_LSTYPE_TYPE_7:
-		if (use_json) {
-			json_object_string_add(
-				json_obj, "type",
-				ospf6_lstype_short_name(lsa->header->type));
-			json_object_string_add(json_obj, "lsId", id);
-			json_object_string_add(json_obj, "advRouter",
-					       adv_router);
-			json_object_int_add(json_obj, "age",
-					    ospf6_lsa_age_current(lsa));
-			json_object_int_add(
-				json_obj, "seqNum",
-				(unsigned long)ntohl(lsa->header->seqnum));
-			json_object_string_add(
-				json_obj, "payload",
-				handler->lh_get_prefix_str(lsa, buf,
-							   sizeof(buf), 0));
-			json_object_array_add(json_array, json_obj);
-		} else
-			vty_out(vty, "%-4s %-15s%-15s%4hu %8lx %30s\n",
-				ospf6_lstype_short_name(lsa->header->type), id,
-				adv_router, ospf6_lsa_age_current(lsa),
-				(unsigned long)ntohl(lsa->header->seqnum),
-				handler->lh_get_prefix_str(lsa, buf,
-							   sizeof(buf), 0));
-		break;
-	case OSPF6_LSTYPE_ROUTER:
-	case OSPF6_LSTYPE_NETWORK:
-	case OSPF6_LSTYPE_GROUP_MEMBERSHIP:
-	case OSPF6_LSTYPE_LINK:
-	case OSPF6_LSTYPE_INTRA_PREFIX:
-		while (handler->lh_get_prefix_str(lsa, buf, sizeof(buf), cnt)
-		       != NULL) {
+	if (handler && handler->lh_get_prefix_str) {
+
+		while (handler->lh_get_prefix_str(lsa, buf, sizeof(buf), cnt) !=
+		       NULL) {
 			if (use_json) {
 				json_object_string_add(
 					json_obj, "type",
@@ -581,15 +765,13 @@ void ospf6_lsa_show_summary(struct vty *vty, struct ospf6_lsa *lsa,
 						lsa->header->type),
 					id, adv_router,
 					ospf6_lsa_age_current(lsa),
-					(unsigned long)ntohl(
-						lsa->header->seqnum),
+					(unsigned long)ntohl(lsa->header->seqnum),
 					buf);
 			cnt++;
 		}
 		if (use_json)
 			json_object_free(json_obj);
-		break;
-	default:
+	} else {
 		if (use_json) {
 			json_object_string_add(
 				json_obj, "type",
@@ -608,7 +790,6 @@ void ospf6_lsa_show_summary(struct vty *vty, struct ospf6_lsa *lsa,
 				ospf6_lstype_short_name(lsa->header->type), id,
 				adv_router, ospf6_lsa_age_current(lsa),
 				(unsigned long)ntohl(lsa->header->seqnum));
-		break;
 	}
 }
 
@@ -678,8 +859,7 @@ void ospf6_lsa_show_internal(struct vty *vty, struct ospf6_lsa *lsa,
 
 	if (use_json) {
 		json_obj = json_object_new_object();
-		json_object_int_add(json_obj, "age",
-				    ospf6_lsa_age_current(lsa));
+		json_object_int_add(json_obj, "age", ospf6_lsa_age_current(lsa));
 		json_object_string_add(json_obj, "type",
 				       ospf6_lstype_name(lsa->header->type));
 		json_object_string_add(json_obj, "linkStateId", id);
@@ -738,8 +918,7 @@ void ospf6_lsa_show(struct vty *vty, struct ospf6_lsa *lsa,
 	timerstring(&res, duration, sizeof(duration));
 	if (use_json) {
 		json_obj = json_object_new_object();
-		json_object_int_add(json_obj, "age",
-				    ospf6_lsa_age_current(lsa));
+		json_object_int_add(json_obj, "age", ospf6_lsa_age_current(lsa));
 		json_object_string_add(json_obj, "type",
 				       ospf6_lstype_name(lsa->header->type));
 		json_object_string_add(json_obj, "linkStateId", id);
@@ -1020,8 +1199,7 @@ void ospf6_flush_self_originated_lsas_now(struct ospf6 *ospf6)
 unsigned short ospf6_lsa_checksum(struct ospf6_lsa_header *lsa_header)
 {
 	uint8_t *buffer = (uint8_t *)&lsa_header->type;
-	int type_offset =
-		buffer - (uint8_t *)&lsa_header->age; /* should be 2 */
+	int type_offset = buffer - (uint8_t *)&lsa_header->age; /* should be 2 */
 
 	/* Skip the AGE field */
 	uint16_t len = ospf6_lsa_size(lsa_header) - type_offset;
@@ -1036,14 +1214,12 @@ unsigned short ospf6_lsa_checksum(struct ospf6_lsa_header *lsa_header)
 int ospf6_lsa_checksum_valid(struct ospf6_lsa_header *lsa_header)
 {
 	uint8_t *buffer = (uint8_t *)&lsa_header->type;
-	int type_offset =
-		buffer - (uint8_t *)&lsa_header->age; /* should be 2 */
+	int type_offset = buffer - (uint8_t *)&lsa_header->age; /* should be 2 */
 
 	/* Skip the AGE field */
 	uint16_t len = ospf6_lsa_size(lsa_header) - type_offset;
 
-	return (fletcher_checksum(buffer, len, FLETCHER_CHECKSUM_VALIDATE)
-		== 0);
+	return (fletcher_checksum(buffer, len, FLETCHER_CHECKSUM_VALIDATE) == 0);
 }
 
 void ospf6_lsa_init(void)
@@ -1132,18 +1308,25 @@ DEFPY (debug_ospf6_lsa_aggregation,
 
 DEFUN (debug_ospf6_lsa_type,
        debug_ospf6_lsa_hex_cmd,
-       "debug ospf6 lsa <router|network|inter-prefix|inter-router|as-external|nssa|link|intra-prefix|unknown> [<originate|examine|flooding>]",
+       "debug ospf6 lsa <router|e-router|network|e-network|inter-prefix|e-inter-prefix|inter-router|e-inter-router|as-external|e-as-external|nssa|link|e-link|intra-prefix|e-intra-prefix|unknown> [<originate|examine|flooding>]",
        DEBUG_STR
        OSPF6_STR
        "Debug Link State Advertisements (LSAs)\n"
        "Display Router LSAs\n"
+       "Display E-Router LSAs\n"
        "Display Network LSAs\n"
+       "Display E-Network LSAs\n"
        "Display Inter-Area-Prefix LSAs\n"
+       "Display E-Inter-Area-Prefix LSAs\n"
        "Display Inter-Router LSAs\n"
+       "Display E-Inter-Router LSAs\n"
        "Display As-External LSAs\n"
+       "Display E-As-External LSAs\n"
        "Display NSSA LSAs\n"
        "Display Link LSAs\n"
+       "Display E-Link LSAs\n"
        "Display Intra-Area-Prefix LSAs\n"
+       "Display E-Intra-Area-Prefix LSAs\n"
        "Display LSAs of unknown origin\n"
        "Display details of LSAs\n"
        "Dump LSAs\n"
@@ -1159,8 +1342,7 @@ DEFUN (debug_ospf6_lsa_type,
 		if (handler == NULL)
 			continue;
 		if (strncmp(argv[idx_lsa]->arg, ospf6_lsa_handler_name(handler),
-			    strlen(argv[idx_lsa]->arg))
-		    == 0)
+			    strlen(argv[idx_lsa]->arg)) == 0)
 			break;
 		if (!strcasecmp(argv[idx_lsa]->arg, handler->lh_name))
 			break;
@@ -1185,19 +1367,26 @@ DEFUN (debug_ospf6_lsa_type,
 
 DEFUN (no_debug_ospf6_lsa_type,
        no_debug_ospf6_lsa_hex_cmd,
-       "no debug ospf6 lsa <router|network|inter-prefix|inter-router|as-external|nssa|link|intra-prefix|unknown> [<originate|examine|flooding>]",
+       "no debug ospf6 lsa <router|e-router|network|e-network|inter-prefix|e-inter-prefix|inter-router|e-inter-router|as-external|e-as-external|nssa|link|e-link|intra-prefix|e-intra-prefix|unknown> [<originate|examine|flooding>]",
        NO_STR
        DEBUG_STR
        OSPF6_STR
        "Debug Link State Advertisements (LSAs)\n"
        "Display Router LSAs\n"
+       "Display E-Router LSAs\n"
        "Display Network LSAs\n"
+       "Display E-Network LSAs\n"
        "Display Inter-Area-Prefix LSAs\n"
+       "Display E-Inter-Area-Prefix LSAs\n"
        "Display Inter-Router LSAs\n"
+       "Display E-Inter-Router LSAs\n"
        "Display As-External LSAs\n"
+       "Display E-As-External LSAs\n"
        "Display NSSA LSAs\n"
        "Display Link LSAs\n"
+       "Display E-Link LSAs\n"
        "Display Intra-Area-Prefix LSAs\n"
+       "Display E-Intra-Area-Prefix LSAs\n"
        "Display LSAs of unknown origin\n"
        "Display details of LSAs\n"
        "Dump LSAs\n"
@@ -1213,8 +1402,7 @@ DEFUN (no_debug_ospf6_lsa_type,
 		if (handler == NULL)
 			continue;
 		if (strncmp(argv[idx_lsa]->arg, ospf6_lsa_handler_name(handler),
-			    strlen(argv[idx_lsa]->arg))
-		    == 0)
+			    strlen(argv[idx_lsa]->arg)) == 0)
 			break;
 		if (!strcasecmp(argv[idx_lsa]->arg, handler->lh_name))
 			break;
@@ -1225,8 +1413,7 @@ DEFUN (no_debug_ospf6_lsa_type,
 
 	if (argc == 6) {
 		if (strmatch(argv[idx_type]->text, "originate"))
-			UNSET_FLAG(handler->lh_debug,
-				   OSPF6_LSA_DEBUG_ORIGINATE);
+			UNSET_FLAG(handler->lh_debug, OSPF6_LSA_DEBUG_ORIGINATE);
 		if (strmatch(argv[idx_type]->text, "examine"))
 			UNSET_FLAG(handler->lh_debug, OSPF6_LSA_DEBUG_EXAMIN);
 		if (strmatch(argv[idx_type]->text, "flooding"))
