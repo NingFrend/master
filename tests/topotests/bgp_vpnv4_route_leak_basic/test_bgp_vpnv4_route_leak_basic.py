@@ -6,12 +6,14 @@
 #
 # Copyright (c) 2018 Cumulus Networks, Inc.
 #                    Donald Sharp
+# Copyright (c) 2024 6WIND SAS
 #
 
 """
 test_bgp-vrf-route-leak-basic.py.py: Test basic vrf route leaking
 """
 
+import json
 import os
 import sys
 from functools import partial
@@ -62,6 +64,22 @@ def teardown_module(mod):
 
     # This function tears down the whole topology.
     tgen.stop_topology()
+
+
+def test_bgp_convergence():
+    tgen = get_topogen()
+    # Don't run this test if we have any failure.
+    if tgen.routers_have_failure():
+        pytest.skip(tgen.errors)
+
+    r1 = tgen.gears["r1"]
+
+    json_file = "{}/{}/show_bgp_ipv4_vpn_init.json".format(CWD, r1.name)
+    expect = json.loads(open(json_file).read())
+
+    test_func = partial(topotest.router_json_cmp, r1, "show bgp ipv4 vpn json", expect)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+    assert result, "BGP IPv4 VPN table check failed:\n{}".format(diff)
 
 
 def test_vrf_route_leak_donna():
@@ -123,13 +141,26 @@ def test_vrf_route_leak_donna():
                 ],
             },
         ],
+        "172.16.3.0/24": [
+            {
+                "protocol": "static",
+                "selected": True,
+                "nexthops": [
+                    {
+                        "fib": True,
+                        "interfaceName": "dummy1",
+                        "active": True,
+                    }
+                ],
+            },
+        ],
         "172.16.101.0/24": None,
     }
 
     test_func = partial(
         topotest.router_json_cmp, r1, "show ip route vrf DONNA json", expect
     )
-    result, diff = topotest.run_and_expect(test_func, None, count=10, wait=0.5)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
     assert result, "BGP VRF DONNA check failed:\n{}".format(diff)
 
 
@@ -182,13 +213,27 @@ def test_vrf_route_leak_eva():
                 "protocol": "connected",
             }
         ],
+        "172.16.3.0/24": [
+            {
+                "protocol": "bgp",
+                "selected": True,
+                "nexthops": [
+                    {
+                        "fib": True,
+                        "interfaceName": "DONNA",
+                        "vrf": "DONNA",
+                        "active": True,
+                    }
+                ],
+            },
+        ],
         "172.16.101.0/24": None,
     }
 
     test_func = partial(
         topotest.router_json_cmp, r1, "show ip route vrf EVA json", expect
     )
-    result, diff = topotest.run_and_expect(test_func, None, count=10, wait=0.5)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
     assert result, "BGP VRF EVA check failed:\n{}".format(diff)
 
 
@@ -236,10 +281,24 @@ def test_vrf_route_leak_default():
                 "protocol": "connected",
             }
         ],
+        "172.16.3.0/24": [
+            {
+                "protocol": "bgp",
+                "selected": True,
+                "nexthops": [
+                    {
+                        "fib": True,
+                        "interfaceName": "DONNA",
+                        "vrf": "DONNA",
+                        "active": True,
+                    }
+                ],
+            },
+        ],
     }
 
     test_func = partial(topotest.router_json_cmp, r1, "show ip route json", expect)
-    result, diff = topotest.run_and_expect(test_func, None, count=10, wait=0.5)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
     assert result, "BGP VRF default check failed:\n{}".format(diff)
 
 
@@ -283,7 +342,7 @@ interface EVA
     test_func = partial(
         topotest.router_json_cmp, r1, "show ip route vrf DONNA json", expect
     )
-    result, diff = topotest.run_and_expect(test_func, None, count=10, wait=0.5)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
     assert result, "BGP VRF DONNA check failed:\n{}".format(diff)
 
     """
@@ -298,8 +357,16 @@ interface EVA
         return topotest.json_cmp(vrf_table, expect)
 
     test_func = partial(check_vrf_table, r1, "DONNA", expect)
-    result, diff = topotest.run_and_expect(test_func, None, count=10, wait=0.5)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
     assert result, "BGP VRF DONNA check failed:\n{}".format(diff)
+
+    # check BGP IPv4 VPN table
+    json_file = "{}/{}/show_bgp_ipv4_vpn_eva_down.json".format(CWD, r1.name)
+    expect = json.loads(open(json_file).read())
+
+    test_func = partial(topotest.router_json_cmp, r1, "show bgp ipv4 vpn json", expect)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+    assert result, "BGP IPv4 VPN table check failed:\n{}".format(diff)
 
 
 def test_vrf_route_leak_donna_after_eva_up():
@@ -353,8 +420,16 @@ interface EVA
     test_func = partial(
         topotest.router_json_cmp, r1, "show ip route vrf DONNA json", expect
     )
-    result, diff = topotest.run_and_expect(test_func, None, count=10, wait=0.5)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
     assert result, "BGP VRF DONNA check failed:\n{}".format(diff)
+
+    # check BGP IPv4 VPN table
+    json_file = "{}/{}/show_bgp_ipv4_vpn_init.json".format(CWD, r1.name)
+    expect = json.loads(open(json_file).read())
+
+    test_func = partial(topotest.router_json_cmp, r1, "show bgp ipv4 vpn json", expect)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+    assert result, "BGP IPv4 VPN table check failed:\n{}".format(diff)
 
 
 def test_vrf_route_leak_donna_add_vrf_zita():
@@ -375,8 +450,16 @@ def test_vrf_route_leak_donna_add_vrf_zita():
     test_func = partial(
         topotest.router_json_cmp, r1, "show ip route vrf DONNA json", expect
     )
-    result, diff = topotest.run_and_expect(test_func, None, count=10, wait=0.5)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
     assert result, "BGP VRF DONNA check failed:\n{}".format(diff)
+
+    # check BGP IPv4 VPN table
+    json_file = "{}/{}/show_bgp_ipv4_vpn_add_zita.json".format(CWD, r1.name)
+    expect = json.loads(open(json_file).read())
+
+    test_func = partial(topotest.router_json_cmp, r1, "show bgp ipv4 vpn json", expect)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+    assert result, "BGP IPv4 VPN table check failed:\n{}".format(diff)
 
 
 def test_vrf_route_leak_donna_set_zita_up():
@@ -416,8 +499,16 @@ interface ZITA
     test_func = partial(
         topotest.router_json_cmp, r1, "show ip route vrf DONNA json", expect
     )
-    result, diff = topotest.run_and_expect(test_func, None, count=10, wait=0.5)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
     assert result, "BGP VRF DONNA check failed:\n{}".format(diff)
+
+    # check BGP IPv4 VPN table
+    json_file = "{}/{}/show_bgp_ipv4_vpn_zita_up.json".format(CWD, r1.name)
+    expect = json.loads(open(json_file).read())
+
+    test_func = partial(topotest.router_json_cmp, r1, "show bgp ipv4 vpn json", expect)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+    assert result, "BGP IPv4 VPN table check failed:\n{}".format(diff)
 
 
 def test_vrf_route_leak_donna_delete_vrf_zita():
@@ -438,8 +529,103 @@ def test_vrf_route_leak_donna_delete_vrf_zita():
     test_func = partial(
         topotest.router_json_cmp, r1, "show ip route vrf DONNA json", expect
     )
-    result, diff = topotest.run_and_expect(test_func, None, count=10, wait=0.5)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
     assert result, "BGP VRF DONNA check failed:\n{}".format(diff)
+
+    # check BGP IPv4 VPN table
+    json_file = "{}/{}/show_bgp_ipv4_vpn_init.json".format(CWD, r1.name)
+    expect = json.loads(open(json_file).read())
+
+    test_func = partial(topotest.router_json_cmp, r1, "show bgp ipv4 vpn json", expect)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+    assert result, "BGP IPv4 VPN table check failed:\n{}".format(diff)
+
+
+def test_vrf_route_leak_default_delete_prefix():
+    logger.info("Remove BGP static prefix 172.16.3.0/24 from VRF DONNA and ensure that the route is deleted on default")
+    tgen = get_topogen()
+    # Don't run this test if we have any failure.
+    if tgen.routers_have_failure():
+        pytest.skip(tgen.errors)
+
+    r1 = tgen.gears["r1"]
+    r1.vtysh_cmd(
+        """
+configure
+router bgp 99 vrf DONNA
+ address-family ipv4 unicast
+  no network 172.16.3.0/24
+"""
+    )
+
+    # Test default VRF.
+    expect = {
+        "172.16.3.0/24": None,
+    }
+
+    test_func = partial(
+        topotest.router_json_cmp, r1, "show ip route json", expect
+    )
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+    assert result, "BGP VRF default check failed:\n{}".format(diff)
+
+    # check BGP IPv4 VPN table
+    json_file = "{}/{}/show_bgp_ipv4_vpn_del_donna_prefix.json".format(CWD, r1.name)
+    expect = json.loads(open(json_file).read())
+
+    test_func = partial(topotest.router_json_cmp, r1, "show bgp ipv4 vpn json", expect)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+    assert result, "BGP IPv4 VPN table check failed:\n{}".format(diff)
+
+
+def test_vrf_route_leak_default_prefix_back():
+    logger.info("Set back BGP static prefix 172.16.3.0/24 to VRF DONNA and ensure that the route is set on default")
+    tgen = get_topogen()
+    # Don't run this test if we have any failure.
+    if tgen.routers_have_failure():
+        pytest.skip(tgen.errors)
+
+    r1 = tgen.gears["r1"]
+    r1.vtysh_cmd(
+        """
+configure
+router bgp 99 vrf DONNA
+ address-family ipv4 unicast
+  network 172.16.3.0/24
+"""
+    )
+
+    # Test default VRF.
+    expect = {
+        "172.16.3.0/24": [
+            {
+                "protocol": "bgp",
+                "selected": True,
+                "nexthops": [
+                    {
+                        "fib": True,
+                        "interfaceName": "DONNA",
+                        "vrf": "DONNA",
+                        "active": True,
+                    }
+                ],
+            },
+        ],
+    }
+
+    test_func = partial(
+        topotest.router_json_cmp, r1, "show ip route json", expect
+    )
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+    assert result, "BGP VRF default check failed:\n{}".format(diff)
+
+    # check BGP IPv4 VPN table
+    json_file = "{}/{}/show_bgp_ipv4_vpn_init.json".format(CWD, r1.name)
+    expect = json.loads(open(json_file).read())
+
+    test_func = partial(topotest.router_json_cmp, r1, "show bgp ipv4 vpn json", expect)
+    result, diff = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+    assert result, "BGP IPv4 VPN table check failed:\n{}".format(diff)
 
 
 def test_memory_leak():

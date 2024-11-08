@@ -1052,14 +1052,22 @@ static bool leak_update_nexthop_valid(struct bgp *to_bgp, struct bgp_dest *bn,
 	struct bgp_path_info *bpi_ultimate;
 	struct bgp *bgp_nexthop;
 	struct bgp_table *table;
+	struct interface *ifp;
 	bool nh_valid;
 
 	bpi_ultimate = bgp_get_imported_bpi_ultimate(source_bpi);
 	table = bgp_dest_table(bpi_ultimate->net);
 
-	if (bpi->extra && bpi->extra->vrfleak && bpi->extra->vrfleak->bgp_orig)
+	if (bpi->extra && bpi->extra->vrfleak && bpi->extra->vrfleak->bgp_orig) {
 		bgp_nexthop = bpi->extra->vrfleak->bgp_orig;
-	else
+		if (bgp_nexthop->vrf_id == VRF_UNKNOWN)
+			return false;
+		else {
+			ifp = if_get_vrf_loopback(bgp_nexthop->vrf_id);
+			if (ifp && !if_is_up(ifp))
+				return false;
+		}
+	} else
 		bgp_nexthop = bgp_orig;
 
 	/*
@@ -1174,6 +1182,16 @@ leak_update(struct bgp *to_bgp, struct bgp_dest *bn,
 		labelssame = bgp_path_info_labels_same(bpi, bgp_labels.label,
 						       bgp_labels.num_labels);
 
+		if (bgp_orig->vrf_id == VRF_UNKNOWN) {
+			if (debug) {
+				zlog_debug(
+					"%s: ->%s(s_flags: 0x%x b_flags: 0x%x): %pFX: Found route, origin VRF does not exist, not leaking",
+					__func__, to_bgp->name_pretty,
+					source_bpi->flags, bpi->flags, p);
+			}
+			return NULL;
+		}
+
 		if (CHECK_FLAG(source_bpi->flags, BGP_PATH_REMOVED)
 		    && CHECK_FLAG(bpi->flags, BGP_PATH_REMOVED)) {
 			if (debug) {
@@ -1185,9 +1203,11 @@ leak_update(struct bgp *to_bgp, struct bgp_dest *bn,
 			return NULL;
 		}
 
-		if (attrhash_cmp(bpi->attr, new_attr) && labelssame
-		    && !CHECK_FLAG(bpi->flags, BGP_PATH_REMOVED)) {
-
+		if (attrhash_cmp(bpi->attr, new_attr) && labelssame &&
+		    !CHECK_FLAG(bpi->flags, BGP_PATH_REMOVED) &&
+		    !!leak_update_nexthop_valid(to_bgp, bn, new_attr, afi, safi, source_bpi, bpi,
+						bgp_orig, p, debug) ==
+			    !!CHECK_FLAG(bpi->flags, BGP_PATH_VALID)) {
 			bgp_attr_unintern(&new_attr);
 			if (debug)
 				zlog_debug(
@@ -1270,6 +1290,14 @@ leak_update(struct bgp *to_bgp, struct bgp_dest *bn,
 				"%s: ->%s(s_flags: 0x%x): %pFX: New route, being removed, not leaking",
 				__func__, to_bgp->name_pretty,
 				source_bpi->flags, p);
+		}
+		return NULL;
+	}
+
+	if (bgp_orig->vrf_id == VRF_UNKNOWN) {
+		if (debug) {
+			zlog_debug("%s: ->%s(s_flags: 0x%x): %pFX: New route, origin VRF does not exist, not leaking",
+				   __func__, to_bgp->name_pretty, source_bpi->flags, p);
 		}
 		return NULL;
 	}
