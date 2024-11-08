@@ -2937,9 +2937,7 @@ DEFUN(bgp_reject_as_sets, bgp_reject_as_sets_cmd,
 	 */
 	for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer)) {
 		peer->last_reset = PEER_DOWN_AS_SETS_REJECT;
-		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+		peer_notify_config_change(peer->connection);
 	}
 
 	return CMD_SUCCESS;
@@ -2962,9 +2960,7 @@ DEFUN(no_bgp_reject_as_sets, no_bgp_reject_as_sets_cmd,
 	 */
 	for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer)) {
 		peer->last_reset = PEER_DOWN_AS_SETS_REJECT;
-		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
+		peer_notify_config_change(peer->connection);
 	}
 
 	return CMD_SUCCESS;
@@ -5127,10 +5123,7 @@ static int peer_conf_interface_get(struct vty *vty, const char *conf_if,
 		peer->last_reset = PEER_DOWN_V6ONLY_CHANGE;
 
 		/* v6only flag changed. Reset bgp seesion */
-		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
-		else
+		if (!peer_notify_config_change(peer->connection))
 			bgp_session_reset(peer);
 	}
 
@@ -5291,7 +5284,7 @@ DEFUN (no_neighbor,
 			 * interface. */
 			if (peer->ifp)
 				bgp_zebra_terminate_radv(peer->bgp, peer);
-			peer_notify_unconfig(peer);
+			peer_notify_unconfig(peer->connection);
 			peer_delete(peer);
 			return CMD_SUCCESS;
 		}
@@ -5327,10 +5320,10 @@ DEFUN (no_neighbor,
 			if (CHECK_FLAG(peer->flags, PEER_FLAG_CAPABILITY_ENHE))
 				bgp_zebra_terminate_radv(peer->bgp, peer);
 
-			peer_notify_unconfig(peer);
+			peer_notify_unconfig(peer->connection);
 			peer_delete(peer);
 			if (other && other->connection->status != Deleted) {
-				peer_notify_unconfig(other);
+				peer_notify_unconfig(other->connection);
 				peer_delete(other);
 			}
 		}
@@ -5365,7 +5358,7 @@ DEFUN (no_neighbor_interface_config,
 		/* Request zebra to terminate IPv6 RAs on this interface. */
 		if (peer->ifp)
 			bgp_zebra_terminate_radv(peer->bgp, peer);
-		peer_notify_unconfig(peer);
+		peer_notify_unconfig(peer->connection);
 		peer_delete(peer);
 	} else {
 		vty_out(vty, "%% Create the bgp interface first\n");
@@ -5773,7 +5766,7 @@ DEFUN (no_neighbor_set_peer_group,
 	if (CHECK_FLAG(peer->flags, PEER_FLAG_CAPABILITY_ENHE))
 		bgp_zebra_terminate_radv(peer->bgp, peer);
 
-	peer_notify_unconfig(peer);
+	peer_notify_unconfig(peer->connection);
 	ret = peer_delete(peer);
 
 	return bgp_vty_return(vty, ret);

@@ -265,7 +265,7 @@ static struct peer *peer_xfer_conn(struct peer *from_peer)
 			from_peer->addpath_paths_limit[afi][safi];
 	}
 
-	if (bgp_getsockname(peer) < 0) {
+	if (bgp_getsockname(keeper) < 0) {
 		flog_err(EC_LIB_SOCKET,
 			 "%%bgp_getsockname() failed for %s peer %s fd %d (from_peer fd %d)",
 			 (CHECK_FLAG(peer->sflags, PEER_STATUS_ACCEPT_PEER)
@@ -277,7 +277,7 @@ static struct peer *peer_xfer_conn(struct peer *from_peer)
 		return NULL;
 	}
 	if (going_away->status > Active) {
-		if (bgp_getsockname(from_peer) < 0) {
+		if (bgp_getsockname(going_away) < 0) {
 			flog_err(EC_LIB_SOCKET,
 				 "%%bgp_getsockname() failed for %s from_peer %s fd %d (peer fd %d)",
 
@@ -325,8 +325,8 @@ void bgp_timer_set(struct peer_connection *connection)
 		/* First entry point of peer's finite state machine.  In Idle
 		   status start timer is on unless peer is shutdown or peer is
 		   inactive.  All other timer must be turned off */
-		if (BGP_PEER_START_SUPPRESSED(peer) || !peer_active(peer)
-		    || peer->bgp->vrf_id == VRF_UNKNOWN) {
+		if (BGP_PEER_START_SUPPRESSED(peer) || !peer_active(connection) ||
+		    peer->bgp->vrf_id == VRF_UNKNOWN) {
 			EVENT_OFF(connection->t_start);
 		} else {
 			BGP_TIMER_ON(connection->t_start, bgp_start_timer,
@@ -1695,11 +1695,11 @@ bgp_connect_success(struct peer_connection *connection)
 		return bgp_stop(connection);
 	}
 
-	if (bgp_getsockname(peer) < 0) {
+	if (bgp_getsockname(connection) < 0) {
 		flog_err_sys(EC_LIB_SOCKET,
 			     "%s: bgp_getsockname(): failed for peer %s, fd %d",
 			     __func__, peer->host, connection->fd);
-		bgp_notify_send(peer->connection, BGP_NOTIFY_FSM_ERR,
+		bgp_notify_send(connection, BGP_NOTIFY_FSM_ERR,
 				bgp_fsm_error_subcode(connection->status));
 		bgp_writes_on(connection);
 		return BGP_FSM_FAILURE;
@@ -1741,11 +1741,11 @@ bgp_connect_success_w_delayopen(struct peer_connection *connection)
 		return bgp_stop(connection);
 	}
 
-	if (bgp_getsockname(peer) < 0) {
+	if (bgp_getsockname(connection) < 0) {
 		flog_err_sys(EC_LIB_SOCKET,
 			     "%s: bgp_getsockname(): failed for peer %s, fd %d",
 			     __func__, peer->host, connection->fd);
-		bgp_notify_send(peer->connection, BGP_NOTIFY_FSM_ERR,
+		bgp_notify_send(connection, BGP_NOTIFY_FSM_ERR,
 				bgp_fsm_error_subcode(connection->status));
 		bgp_writes_on(connection);
 		return BGP_FSM_FAILURE;
@@ -1808,12 +1808,14 @@ bgp_connect_fail(struct peer_connection *connection)
 /* after connect is called(), getpeername is able to return
  * port and address on non established streams
  */
-static void bgp_connect_in_progress_update_connection(struct peer *peer)
+static void bgp_connect_in_progress_update_connection(struct peer_connection *connection)
 {
-	bgp_updatesockname(peer);
+	struct peer *peer = connection->peer;
+
+	bgp_updatesockname(peer, connection);
 	if (!peer->su_remote && !BGP_CONNECTION_SU_UNSPEC(peer->connection)) {
 		/* if connect initiated, then dest port and dest addresses are well known */
-		peer->su_remote = sockunion_dup(&peer->connection->su);
+		peer->su_remote = sockunion_dup(&connection->su);
 		if (sockunion_family(peer->su_remote) == AF_INET)
 			peer->su_remote->sin.sin_port = htons(peer->port);
 		else if (sockunion_family(peer->su_remote) == AF_INET6)
@@ -1917,7 +1919,7 @@ static enum bgp_fsm_state_progress bgp_start(struct peer_connection *connection)
 				 __func__, peer->connection->fd);
 			return BGP_FSM_FAILURE;
 		}
-		bgp_connect_in_progress_update_connection(peer);
+		bgp_connect_in_progress_update_connection(connection);
 
 		/*
 		 * - when the socket becomes ready, poll() will signify POLLOUT
@@ -2749,10 +2751,7 @@ static void bgp_gr_update_mode_of_all_peers(struct bgp *bgp,
 		/* Reset session to match with behavior for other peer
 		 * configs that require the session to be re-setup.
 		 */
-		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
-		else
+		if (!peer_notify_config_change(peer->connection))
 			bgp_session_reset_safe(peer, &nnode);
 	}
 }
@@ -2951,10 +2950,7 @@ unsigned int bgp_peer_gr_action(struct peer *peer, enum peer_mode old_state,
 		/* Reset session to match with behavior for other peer
 		 * configs that require the session to be re-setup.
 		 */
-		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
-			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
-					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
-		else
+		if (!peer_notify_config_change(peer->connection))
 			bgp_session_reset(peer);
 	}
 
